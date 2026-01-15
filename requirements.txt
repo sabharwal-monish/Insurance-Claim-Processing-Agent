@@ -1,0 +1,24 @@
+# Web Server
+fastapi
+uvicorn[standard]
+gunicorn
+python-multipart
+
+# AI Agents & LLM
+langchain
+langchain-groq
+langchain-community
+groq
+
+# Database (SQLAlchemy + MySQL)
+sqlalchemy>=2.0.0
+pymysql
+cryptography
+
+# Environment & Utilities
+python-dotenv
+pydantic
+pydantic-settings
+
+# Image Processing (Lightweight)
+Pillow

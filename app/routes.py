@@ -1,0 +1,168 @@
+from fastapi import APIRouter, Request, UploadFile, File
+from fastapi.responses import JSONResponse, HTMLResponse
+from uuid import uuid4
+from app.db_helper import get_db_connection
+from app.langchain_helper import chat_with_groq
+import os
+import re
+import smtplib
+from email.message import EmailMessage
+from .image_processor import analyze_car_damage
+
+router = APIRouter()
+
+# --- Helpers ---
+
+REQUIRED_FIELDS = ["date_time_of_incident", "policy_number", "vehicle_info", "incident_description", "claimant_name"]
+
+def send_claim_summary(session_id, analysis_text):
+    """Generates the final report log."""
+    msg = EmailMessage()
+    msg.set_content(f"New Claim Submitted!\n\nSession ID: {session_id}\n\nAI Analysis:\n{analysis_text}")
+    msg['Subject'] = f"New Insurance Claim - Session {session_id[:8]}"
+    msg['From'] = "claims-agent@insurance-ai.com"
+    msg['To'] = "claims-department@insurance-ai.com"
+
+    # Log to terminal (Replace with actual SMTP logic if needed)
+    print(f"📧 EMAIL REPORT GENERATED for Session {session_id}")
+
+def clean_extract(keys, param_dict):
+    """Safely extracts strings from Dialogflow's mixed-type parameters."""
+    for k in keys:
+        val = param_dict.get(k)
+        if val:
+            if isinstance(val, dict):
+                val = next(iter(val.values()))
+            if isinstance(val, list):
+                val = val[0] if len(val) > 0 else None
+            if val and str(val).strip() not in ["", "[]"]:
+                return str(val).strip()
+    return None
+
+# --- Routes ---
+
+@router.get("/upload-image/{session_id}")
+async def upload_page(session_id: str):
+    html = f"""
+    <html><body style='font-family: sans-serif; text-align: center; padding: 50px;'>
+        <h3>Upload Damage Photo</h3>
+        <p>Session ID: {session_id}</p>
+        <form action='/upload-image/{session_id}' method='post' enctype='multipart/form-data'>
+            <input type='file' name='file' accept='image/*' required><br><br>
+            <input type='submit' value='Upload Photo' style='padding: 10px 20px;'>
+        </form>
+    </body></html>
+    """
+    return HTMLResponse(content=html)
+
+@router.post("/upload-image/{session_id}")
+async def process_upload(session_id: str, file: UploadFile = File(...)):
+    try:
+        # 1. Save file
+        os.makedirs("data/uploads", exist_ok=True)
+        path = f"data/uploads/{session_id}_{file.filename}"
+        with open(path, "wb") as f:
+            f.write(await file.read())
+        
+        # 2. Vision Analysis
+        print(f"--- 🔍 Starting Analysis for Session: {session_id} ---")
+        damage_report = analyze_car_damage(path)
+        
+        # 3. Trigger Report
+        send_claim_summary(session_id, damage_report)
+        
+        # 4. Update DB
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE insurance_sessions SET photo_uploaded = TRUE WHERE session_id = %s", (session_id,))
+        conn.commit()
+        conn.close()
+        
+        # 5. Return success message as HTML for the browser
+        return HTMLResponse(content=f"""
+            <html><body style='font-family: Arial; text-align: center; padding: 100px;'>
+                <h1 style='color: green;'>Upload Successful! ✅</h1>
+                <p>Analysis Result: {damage_report}</p>
+                <p>You can now close this tab and return to the chat.</p>
+            </body></html>
+        """)
+
+    except Exception as e:
+        print(f"❌ Error in process_upload: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@router.post("/webhook")
+async def dialogflow_webhook(request: Request):
+    try:
+        payload = await request.json()
+        session_path = payload.get('session', '')
+        session_id = session_path.split('/')[-1] if session_path else str(uuid4())
+        
+        query_result = payload.get('queryResult', {})
+        user_input = query_result.get('queryText', '')
+        intent_name = query_result.get('intent', {}).get('displayName', '')
+        parameters = query_result.get('parameters', {})
+
+        conn = get_db_connection()
+        cursor = conn.cursor(dictionary=True)
+
+        # Ensure Session Exists
+        cursor.execute("SELECT * FROM insurance_sessions WHERE session_id = %s", (session_id,))
+        existing_row = cursor.fetchone()
+        if not existing_row:
+            cursor.execute("INSERT INTO insurance_sessions (session_id) VALUES (%s)", (session_id,))
+            conn.commit()
+            existing_row = {f: None for f in REQUIRED_FIELDS}
+
+        # Parameter Extraction
+        new_data = {}
+        if intent_name == "provide_policy_number":
+            extracted = clean_extract(["policy_number", "number"], parameters)
+            if not extracted:
+                match = re.search(r'([A-Z0-9-]{4,15})', user_input.upper())
+                extracted = match.group(0) if match else None
+            new_data["policy_number"] = extracted
+        elif intent_name == "provide_date_time":
+            new_data["date_time_of_incident"] = clean_extract(["date", "date-time", "time"], parameters)
+        elif intent_name == "provide_vehicle_info":
+            new_data["vehicle_info"] = clean_extract(["vehicle_info", "any"], parameters)
+        elif intent_name == "provide_name":
+            new_data["claimant_name"] = clean_extract(["claimant_name", "person", "name"], parameters)
+        elif intent_name == "describe_incident":
+            new_data["incident_description"] = user_input
+
+        # Database Update
+        updates = [f"{field} = %s" for field, val in new_data.items() if val]
+        vals = [val for val in new_data.values() if val]
+        if updates:
+            sql = f"UPDATE insurance_sessions SET {', '.join(updates)} WHERE session_id = %s"
+            vals.append(session_id)
+            cursor.execute(sql, tuple(vals))
+            conn.commit()
+
+        # Fetch State
+        cursor.execute("SELECT * FROM insurance_sessions WHERE session_id = %s", (session_id,))
+        full_session = cursor.fetchone()
+        conn.close()
+
+        # Check Completion
+        is_complete = all(full_session.get(f) for f in REQUIRED_FIELDS)
+        
+        if is_complete:
+            # We are done! Send closing message and end session.
+            upload_url = f"http://localhost:8000/upload-image/{session_id}"
+            final_text = (f"Thank you, {full_session.get('claimant_name')}. I have all your details. "
+                          f"Please finish by uploading photos here: {upload_url}. Goodbye!")
+            
+            return {
+                "fulfillmentText": final_text,
+                "endInteraction": True  # Closes the chat
+            }
+
+        # Not complete? Get next question from AI
+        ai_reply = chat_with_groq(user_input, full_session)
+        return {"fulfillmentText": ai_reply}
+
+    except Exception as e:
+        print(f"❌ Webhook Error: {e}")
+        return {"fulfillmentText": "I'm having a technical issue. Can we try that again?"}
