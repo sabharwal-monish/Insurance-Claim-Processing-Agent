@@ -107,7 +107,7 @@ async def dialogflow_webhook(request: Request):
         if conn is None:
             return {"fulfillmentText": "Database connection error. Please try again later."}
             
-        cursor = conn.cursor(dictionary=True)
+        cursor = conn.cursor()
 
         # Ensure Session Exists
         cursor.execute("SELECT * FROM insurance_sessions WHERE session_id = %s", (session_id,))
