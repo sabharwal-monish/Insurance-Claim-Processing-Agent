@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from app.routes import router as webhook_router
 from app.db_helper import get_db_connection
 import os
+from datetime import datetime
 
 app = FastAPI(
     title="Insurance Claim Processing Agent",
@@ -12,7 +13,6 @@ app = FastAPI(
 )
 
 # 1. Setup CORS
-# In production, replace ["*"] with your actual frontend/Dialogflow URL
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -22,7 +22,9 @@ app.add_middleware(
 )
 
 # 2. Static File Mounting (Claim Photos)
-UPLOAD_DIR = "data/uploads"
+# Using absolute path to ensure Render finds it correctly
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_DIR = os.path.join(BASE_DIR, "data", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
 
@@ -35,20 +37,16 @@ async def root():
     return {
         "status": "online",
         "message": "Insurance Claim Agent is Live!",
-        "system_time": os.popen("date /t").read().strip(), # Quick server-side time check
+        "system_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # Works on both Windows & Linux
         "docs": "/docs"
     }
 
-# 5. DB Connectivity Check (Optimized with Dependency)
+# 5. DB Connectivity Check
 @app.get("/check-db", tags=["Health"])
 async def check_db():
-    """
-    Checks if the Aiven MySQL cloud instance is reachable.
-    """
     try:
         conn = get_db_connection()
         if conn and conn.is_connected():
-            # Get a quick count or server info to prove it's live
             db_info = conn.get_server_info()
             conn.close()
             return {
@@ -62,5 +60,5 @@ async def check_db():
 
 if __name__ == "__main__":
     import uvicorn
-    # Start the server
+    # Local testing port
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
