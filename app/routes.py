@@ -5,8 +5,6 @@ from app.db_helper import get_db_connection
 from app.langchain_helper import chat_with_groq
 import os
 import re
-import smtplib
-from email.message import EmailMessage
 from .image_processor import analyze_car_damage
 
 router = APIRouter()
@@ -17,14 +15,9 @@ REQUIRED_FIELDS = ["date_time_of_incident", "policy_number", "vehicle_info", "in
 
 def send_claim_summary(session_id, analysis_text):
     """Generates the final report log."""
-    msg = EmailMessage()
-    msg.set_content(f"New Claim Submitted!\n\nSession ID: {session_id}\n\nAI Analysis:\n{analysis_text}")
-    msg['Subject'] = f"New Insurance Claim - Session {session_id[:8]}"
-    msg['From'] = "claims-agent@insurance-ai.com"
-    msg['To'] = "claims-department@insurance-ai.com"
-
     # Log to terminal (Replace with actual SMTP logic if needed)
     print(f"📧 EMAIL REPORT GENERATED for Session {session_id}")
+    print(f"Analysis: {analysis_text}")
 
 def clean_extract(keys, param_dict):
     """Safely extracts strings from Dialogflow's mixed-type parameters."""
@@ -57,10 +50,14 @@ async def upload_page(session_id: str):
 
 @router.post("/upload-image/{session_id}")
 async def process_upload(session_id: str, file: UploadFile = File(...)):
+    conn = None
     try:
-        # 1. Save file
-        os.makedirs("data/uploads", exist_ok=True)
-        path = f"data/uploads/{session_id}_{file.filename}"
+        # 1. Save file using absolute path
+        BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        UPLOAD_DIR = os.path.join(BASE_DIR, "app", "data", "uploads")
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        
+        path = os.path.join(UPLOAD_DIR, f"{session_id}_{file.filename}")
         with open(path, "wb") as f:
             f.write(await file.read())
         
@@ -73,16 +70,15 @@ async def process_upload(session_id: str, file: UploadFile = File(...)):
         
         # 4. Update DB
         conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE insurance_sessions SET photo_uploaded = TRUE WHERE session_id = %s", (session_id,))
-        conn.commit()
-        conn.close()
+        if conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE insurance_sessions SET photo_uploaded = TRUE WHERE session_id = %s", (session_id,))
+            conn.commit()
         
-        # 5. Return success message as HTML for the browser
         return HTMLResponse(content=f"""
             <html><body style='font-family: Arial; text-align: center; padding: 100px;'>
                 <h1 style='color: green;'>Upload Successful! ✅</h1>
-                <p>Analysis Result: {damage_report}</p>
+                <p><strong>AI Analysis:</strong> {damage_report}</p>
                 <p>You can now close this tab and return to the chat.</p>
             </body></html>
         """)
@@ -90,9 +86,13 @@ async def process_upload(session_id: str, file: UploadFile = File(...)):
     except Exception as e:
         print(f"❌ Error in process_upload: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
+    finally:
+        if conn and conn.is_connected():
+            conn.close()
 
 @router.post("/webhook")
 async def dialogflow_webhook(request: Request):
+    conn = None
     try:
         payload = await request.json()
         session_path = payload.get('session', '')
@@ -104,6 +104,9 @@ async def dialogflow_webhook(request: Request):
         parameters = query_result.get('parameters', {})
 
         conn = get_db_connection()
+        if conn is None:
+            return {"fulfillmentText": "Database connection error. Please try again later."}
+            
         cursor = conn.cursor(dictionary=True)
 
         # Ensure Session Exists
@@ -143,20 +146,21 @@ async def dialogflow_webhook(request: Request):
         # Fetch State
         cursor.execute("SELECT * FROM insurance_sessions WHERE session_id = %s", (session_id,))
         full_session = cursor.fetchone()
-        conn.close()
 
         # Check Completion
         is_complete = all(full_session.get(f) for f in REQUIRED_FIELDS)
         
         if is_complete:
-            # We are done! Send closing message and end session.
-            upload_url = f"http://localhost:8000/upload-image/{session_id}"
+            # Detect Public URL (Render) or fallback to localhost
+            base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
+            upload_url = f"{base_url}/upload-image/{session_id}"
+            
             final_text = (f"Thank you, {full_session.get('claimant_name')}. I have all your details. "
                           f"Please finish by uploading photos here: {upload_url}. Goodbye!")
             
             return {
                 "fulfillmentText": final_text,
-                "endInteraction": True  # Closes the chat
+                "endInteraction": True
             }
 
         # Not complete? Get next question from AI
@@ -166,3 +170,6 @@ async def dialogflow_webhook(request: Request):
     except Exception as e:
         print(f"❌ Webhook Error: {e}")
         return {"fulfillmentText": "I'm having a technical issue. Can we try that again?"}
+    finally:
+        if conn and conn.is_connected():
+            conn.close()
