@@ -45,7 +45,7 @@ def analyze_car_damage(image_input):
             print(f"🔍 Analyzing local image with Groq Vision API...")
         
         completion = client.chat.completions.create(
-            model="meta-llama/llama-3.2-11b-vision-preview", # Using 11b preview as it's more stable for vision
+            model="meta-llama/llama-4-scout-17b-16e-instruct", # Updated to 2026 stable Llama 4 Vision model
             messages=[
                 {
                     "role": "user",
@@ -73,12 +73,19 @@ def analyze_car_damage(image_input):
             timeout=30
         )
         
+        # Log the full response for debugging
+        print(f"DEBUG: Groq Response Status: {completion.id if hasattr(completion, 'id') else 'N/A'}")
+        
         analysis_result = completion.choices[0].message.content
         print(f"✅ Analysis complete: {len(analysis_result)} characters")
+        print(f"Groq Analysis Result Snippet: {analysis_result[:100]}...")
         return analysis_result
 
     except Exception as e:
-        error_msg = f"❌ Groq Vision Error: {type(e).__name__} - {str(e)}"
+        # Check for specific Groq API errors
+        status_code = getattr(e, 'status_code', 'N/A')
+        error_msg = f"❌ Groq Vision Error (Status: {status_code}): {type(e).__name__} - {str(e)}"
         print(error_msg)
-        return f"Analysis failed: {str(e)}"
+        return f"Analysis failed (Status: {status_code}): {str(e)}"
+
 
