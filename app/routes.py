@@ -85,9 +85,11 @@ async def process_upload(session_id: str, file: UploadFile = File(...)):
 
     except Exception as e:
         print(f"❌ Error in process_upload: {e}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(status_code=500, content={"error": str(e)})
     finally:
-        if conn and conn.is_connected():
+        if conn and conn.open:
             conn.close()
 
 @router.post("/webhook")
@@ -169,7 +171,9 @@ async def dialogflow_webhook(request: Request):
 
     except Exception as e:
         print(f"❌ Webhook Error: {e}")
+        import traceback
+        traceback.print_exc()
         return {"fulfillmentText": "I'm having a technical issue. Can we try that again?"}
     finally:
-        if conn and conn.is_connected():
+        if conn and conn.open:
             conn.close()

@@ -46,16 +46,22 @@ async def root():
 async def check_db():
     try:
         conn = get_db_connection()
-        if conn and conn.is_connected():
-            db_info = conn.get_server_info()
+        if conn and conn.open:
+            # Get server info using a query since get_server_info() may not be available
+            cursor = conn.cursor()
+            cursor.execute("SELECT VERSION()")
+            db_version = cursor.fetchone()
+            cursor.close()
             conn.close()
             return {
                 "status": "success", 
                 "message": "Connected to Aiven MySQL successfully.",
-                "server_version": db_info
+                "server_version": db_version.get('VERSION()') if db_version else 'unknown'
             }
         return {"status": "error", "message": "Database connection failed check."}
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": f"Connection Exception: {str(e)}"}
 
 if __name__ == "__main__":
