@@ -42,9 +42,9 @@ def get_db_connection(max_retries=3):
                 database=os.getenv("DB_NAME"),
                 ssl={'ca': ssl_ca_path},
                 cursorclass=pymysql.cursors.DictCursor,
-                connect_timeout=10,
-                read_timeout=10,
-                write_timeout=10
+                connect_timeout=30,
+                read_timeout=30,
+                write_timeout=30
             )
             
             # Test the connection with a simple query

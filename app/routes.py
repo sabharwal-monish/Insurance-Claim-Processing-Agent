@@ -97,6 +97,8 @@ async def dialogflow_webhook(request: Request):
     conn = None
     try:
         payload = await request.json()
+        print(f"DEBUG: Full Dialogflow Payload: {payload}")
+        
         session_path = payload.get('session', '')
         session_id = session_path.split('/')[-1] if session_path else str(uuid4())
         
@@ -127,9 +129,15 @@ async def dialogflow_webhook(request: Request):
         if url_match:
             photo_url = url_match.group(0)
             print(f"📸 Detected Image URL in user input: {photo_url}")
-            damage_report = analyze_car_damage(photo_url)
-            new_data["damage_report"] = damage_report
-            new_data["photo_uploaded"] = True
+            try:
+                damage_report = analyze_car_damage(photo_url)
+                print(f"Groq Analysis Result: {damage_report}")
+                new_data["damage_report"] = damage_report
+                new_data["photo_uploaded"] = True
+            except Exception as vision_err:
+                print(f"❌ Vision Analysis Error: {vision_err}")
+                new_data["damage_report"] = f"Vision analysis failed: {vision_err}"
+
 
         if intent_name == "provide_policy_number":
             extracted = clean_extract(["policy_number", "number"], parameters)
