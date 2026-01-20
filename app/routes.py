@@ -121,6 +121,16 @@ async def dialogflow_webhook(request: Request):
 
         # Parameter Extraction
         new_data = {}
+        
+        # Global URL Detection (Works across any intent)
+        url_match = re.search(r'(https?://\S+\.(?:png|jpg|jpeg|webp|gif))', user_input)
+        if url_match:
+            photo_url = url_match.group(0)
+            print(f"📸 Detected Image URL in user input: {photo_url}")
+            damage_report = analyze_car_damage(photo_url)
+            new_data["damage_report"] = damage_report
+            new_data["photo_uploaded"] = True
+
         if intent_name == "provide_policy_number":
             extracted = clean_extract(["policy_number", "number"], parameters)
             if not extracted:
@@ -134,16 +144,9 @@ async def dialogflow_webhook(request: Request):
         elif intent_name == "provide_name":
             new_data["claimant_name"] = clean_extract(["claimant_name", "person", "name"], parameters)
         elif intent_name == "describe_incident":
-            # Detect image URL in user input
-            url_match = re.search(r'(https?://\S+\.(?:png|jpg|jpeg|webp|gif))', user_input)
-            if url_match:
-                photo_url = url_match.group(0)
-                print(f"📸 Detected Image URL: {photo_url}")
-                damage_report = analyze_car_damage(photo_url)
-                new_data["damage_report"] = damage_report
-                new_data["photo_uploaded"] = True
-            else:
+            if "damage_report" not in new_data:
                 new_data["incident_description"] = user_input
+
 
         # Database Update
         updates = [f"{field} = %s" for field, val in new_data.items() if val is not None]
