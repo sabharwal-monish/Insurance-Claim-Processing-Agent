@@ -1,7 +1,3 @@
-# Secrets
-.env
-certs/ca.pem
-
 # Python
 __pycache__/
 *.py[cod]
@@ -10,3 +6,4 @@ data/uploads/*
 # Environment
 venv/
 .venv/
+.env
