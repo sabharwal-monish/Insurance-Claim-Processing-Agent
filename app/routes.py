@@ -134,11 +134,20 @@ async def dialogflow_webhook(request: Request):
         elif intent_name == "provide_name":
             new_data["claimant_name"] = clean_extract(["claimant_name", "person", "name"], parameters)
         elif intent_name == "describe_incident":
-            new_data["incident_description"] = user_input
+            # Detect image URL in user input
+            url_match = re.search(r'(https?://\S+\.(?:png|jpg|jpeg|webp|gif))', user_input)
+            if url_match:
+                photo_url = url_match.group(0)
+                print(f"📸 Detected Image URL: {photo_url}")
+                damage_report = analyze_car_damage(photo_url)
+                new_data["damage_report"] = damage_report
+                new_data["photo_uploaded"] = True
+            else:
+                new_data["incident_description"] = user_input
 
         # Database Update
-        updates = [f"{field} = %s" for field, val in new_data.items() if val]
-        vals = [val for val in new_data.values() if val]
+        updates = [f"{field} = %s" for field, val in new_data.items() if val is not None]
+        vals = [val for val in new_data.values() if val is not None]
         if updates:
             sql = f"UPDATE insurance_sessions SET {', '.join(updates)} WHERE session_id = %s"
             vals.append(session_id)
@@ -152,13 +161,17 @@ async def dialogflow_webhook(request: Request):
         # Check Completion
         is_complete = all(full_session.get(f) for f in REQUIRED_FIELDS)
         
-        if is_complete:
+        if is_complete or full_session.get('damage_report'):
             # Detect Public URL (Render) or fallback to localhost
             base_url = os.getenv("RENDER_EXTERNAL_URL", "http://localhost:8000")
             upload_url = f"{base_url}/upload-image/{session_id}"
             
-            final_text = (f"Thank you, {full_session.get('claimant_name')}. I have all your details. "
-                          f"Please finish by uploading photos here: {upload_url}. Goodbye!")
+            if full_session.get('damage_report'):
+                final_text = (f"Thank you, {full_session.get('claimant_name') or 'there'}. I have analyzed your photo. "
+                              f"Analysis: {full_session.get('damage_report')}. Your claim is now being processed.")
+            else:
+                final_text = (f"Thank you, {full_session.get('claimant_name')}. I have all your details. "
+                              f"Please finish by uploading photos here: {upload_url}. Goodbye!")
             
             return {
                 "fulfillmentText": final_text,
@@ -168,6 +181,7 @@ async def dialogflow_webhook(request: Request):
         # Not complete? Get next question from AI
         ai_reply = chat_with_groq(user_input, full_session)
         return {"fulfillmentText": ai_reply}
+
 
     except Exception as e:
         print(f"❌ Webhook Error: {e}")

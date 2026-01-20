@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS insurance_sessions (
     vehicle_info TEXT DEFAULT NULL,
     incident_description TEXT DEFAULT NULL,
     photo_uploaded BOOLEAN DEFAULT FALSE,
+    damage_report TEXT DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_policy_number (policy_number),
